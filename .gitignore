@@ -1,0 +1,7 @@
+# 模型权重(6 GB,按 README 自行下载)
+models/
+# 运行时生成:最近一次截图/识别结果(含游戏画面)、个人窗口位置等配置
+last_capture.png
+last_capture.txt
+config.json
+__pycache__/
