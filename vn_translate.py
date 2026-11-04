@@ -46,7 +46,7 @@ def load_config():
     # glossary: 术语表,每条「日文->中文 #备注」,整句翻译和查词都会参考;和中文同形但意思不同的词放这里
     cfg = {"game_title": "", "region": DEFAULT_REGION, "glossary": ["辟易->厌烦", "香具師->街头小贩 #在庙会、路边摆摊吆喝叫卖的人"], "geometry": None,
            "trigger_key": "t", "trigger_buttons": ["button8", "button9"],
-           "readings": {"座敷童子": "ざしきわらし", "素": "す"}, "dict_url": "https://cjjc.weblio.jp/content/{word}"}
+           "readings": {"座敷童子": "ざしきわらし", "素": "す", "一寸": "ちょっと"}, "dict_url": "https://cjjc.weblio.jp/content/{word}"}
     if CONFIG.exists():
         saved = json.loads(CONFIG.read_text(encoding="utf-8"))
         # 术语表和读音表与默认值合并,否则代码里后加的默认条目会被旧 config.json 里存的整张表盖掉
@@ -223,15 +223,47 @@ def ocr_scored(mocr, img):
     return text, float(scores[0][valid].mean())
 
 
+def extra_close(chars):
+    """「a」b」:两个」之间没有「,前一个」多半是认错的字,返回它的下标。"""
+    for i, c in enumerate(chars):
+        for l, r in ("「」", "『』"):
+            if c == r and re.match(f"[^{l}{r}]+{r}", "".join(chars[i + 1:])):
+                return i
+    return None
+
+
+def fix_quote(mocr, img):
+    """manga-ocr 看到行首的「后,省略号后面的字容易被认成」(……一寸 → ……」寸);
+    把多出来的」换成模型在那个位置的第二候选,从那里往后重新识别。"""
+    import torch
+    from manga_ocr.ocr import post_process
+
+    x = mocr._preprocess(img.convert("L").convert("RGB"))[None].to(mocr.model.device)
+    seq = mocr.model.generate(x, max_length=300, no_repeat_ngram_size=0)[0]
+    i = extra_close(mocr.tokenizer.convert_ids_to_tokens(seq[1:].tolist()))
+    if i is not None:
+        with torch.no_grad():
+            lp = mocr.model(pixel_values=x, decoder_input_ids=seq[None, :i + 1]).logits[0, -1].log_softmax(-1)
+        lp[seq[i + 1]] = -float("inf")
+        alt = int(lp.argmax())
+        if lp[alt] > -5:  # 第二候选也很不像就不改
+            prefix = torch.cat([seq[:i + 1], seq.new_tensor([alt])])[None]
+            seq = mocr.model.generate(x, decoder_input_ids=prefix, max_length=300, no_repeat_ngram_size=0)[0]
+    return post_process(mocr.tokenizer.decode(seq.cpu(), skip_special_tokens=True))
+
+
 def ocr_line(mocr, line):
     """同一行用几种段数分别切开识别,取把握最高的;切口压到的字只在某一种切法里出错。"""
     w, h = line.size
     n = int(round(np.sqrt(w / h)))
     if w / h <= 3 or n <= 1:
-        return ocr_scored(mocr, line)[0]
-    grid = char_grid(line)
-    candidates = [ocr_scored(mocr, fold_line(line, k, grid)) for k in sorted({max(2, n - 1), n, n + 1})]
-    return max(candidates, key=lambda c: c[1])[0]
+        candidates = [(*ocr_scored(mocr, line), line)]
+    else:
+        grid = char_grid(line)
+        candidates = [(*ocr_scored(mocr, block), block)
+                      for block in (fold_line(line, k, grid) for k in sorted({max(2, n - 1), n, n + 1}))]
+    text, _, img = max(candidates, key=lambda c: c[1])
+    return fix_quote(mocr, img) if extra_close(text) is not None else text
 
 
 def ocr_dialogue(det, mocr, img):
