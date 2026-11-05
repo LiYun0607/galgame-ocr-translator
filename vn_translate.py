@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 import jaconv
 import numpy as np
-from PIL import Image, ImageGrab, ImageOps
+from PIL import Image, ImageDraw, ImageGrab, ImageOps
 from pynput import keyboard, mouse
 from Xlib import X, display as xdisplay
 
@@ -40,11 +40,13 @@ SYSTEM_PROMPT = (
 
 
 def load_config():
-    # game_title: 游戏窗口标题里的一段文字,用来找游戏窗口,必须填
+    # games: 游戏列表,每项 title(窗口标题里的一段文字,用来找窗口,必须填)、region(台词区)、
+    #        aspect(画面宽高比,默认 16:9)、mask(台词区里要遮掉的小块,如会动的等待图标,比例同 region);
+    #        只玩一个游戏时可以只写 game_title,加载时转成 games
     # trigger_key: 单个字符或 pynput 键名(如 "f9");trigger_buttons: 鼠标侧键 button8(后退)/button9(前进)
     # readings: 读音修正表,分词词典读错的人名、专有词写在这里;dict_url: 「查词典」打开的网址,{word} 处填词
     # glossary: 术语表,每条「日文->中文 #备注」,整句翻译和查词都会参考;和中文同形但意思不同的词放这里
-    cfg = {"game_title": "", "region": DEFAULT_REGION, "glossary": ["辟易->厌烦", "香具師->街头小贩 #在庙会、路边摆摊吆喝叫卖的人"], "geometry": None,
+    cfg = {"games": [], "glossary": ["辟易->厌烦", "香具師->街头小贩 #在庙会、路边摆摊吆喝叫卖的人"], "geometry": None,
            "trigger_key": "t", "trigger_buttons": ["button8", "button9"],
            "readings": {"座敷童子": "ざしきわらし", "素": "す", "一寸": "ちょっと"}, "dict_url": "https://cjjc.weblio.jp/content/{word}"}
     if CONFIG.exists():
@@ -52,7 +54,11 @@ def load_config():
         # 术语表和读音表与默认值合并,否则代码里后加的默认条目会被旧 config.json 里存的整张表盖掉
         saved["glossary"] = cfg["glossary"] + [g for g in saved.get("glossary", []) if g not in cfg["glossary"]]
         saved["readings"] = {**cfg["readings"], **saved.get("readings", {})}
+        if "game_title" in saved:
+            saved["games"] = [{"title": saved.pop("game_title"), "region": saved.pop("region", DEFAULT_REGION)}]
         cfg.update(saved)
+    for game in cfg["games"]:
+        game.setdefault("region", DEFAULT_REGION)
     return cfg
 
 
@@ -78,29 +84,30 @@ def active_window_title():
         d.close()
 
 
-def find_game_rect(game_title):
-    """返回标题含 game_title 的窗口里游戏画面(去掉黑边后的 16:9 区域)在屏幕上的 (x, y, w, h),找不到返回 None。"""
-    if not game_title:  # 空串会匹配任何窗口
-        return None
+def find_game(games):
+    """返回开着窗口的游戏(前台的优先)和它的画面(去掉黑边后的区域)在屏幕上的 (x, y, w, h),都没开返回 (None, None)。"""
+    active = active_window_title()
     d = xdisplay.Display()
     try:
         root = d.screen().root
         clients = root.get_full_property(d.intern_atom("_NET_CLIENT_LIST"), X.AnyPropertyType)
-        for wid in clients.value if clients else []:
-            win = d.create_resource_object("window", wid)
-            if game_title not in window_title(d, win):
-                continue
-            geo = win.get_geometry()
-            pos = root.translate_coords(win, 0, 0)
-            x, y, w, h = pos.x, pos.y, geo.width, geo.height
-            if w / h > GAME_ASPECT:
-                cw = round(h * GAME_ASPECT)
-                return x + (w - cw) // 2, y, cw, h
-            ch = round(w / GAME_ASPECT)
-            return x, y + (h - ch) // 2, w, ch
+        wins = [d.create_resource_object("window", wid) for wid in (clients.value if clients else [])]
+        for game in sorted(games, key=lambda g: g["title"] not in active):
+            for win in wins:
+                if not game["title"] or game["title"] not in window_title(d, win):  # 空串会匹配任何窗口
+                    continue
+                geo = win.get_geometry()
+                pos = root.translate_coords(win, 0, 0)
+                x, y, w, h = pos.x, pos.y, geo.width, geo.height
+                aspect = game.get("aspect", GAME_ASPECT)
+                if w / h > aspect:
+                    cw = round(h * aspect)
+                    return game, (x + (w - cw) // 2, y, cw, h)
+                ch = round(w / aspect)
+                return game, (x, y + (h - ch) // 2, w, ch)
     finally:
         d.close()
-    return None
+    return None, None
 
 
 def region_bbox(rect, region):
@@ -266,10 +273,16 @@ def ocr_line(mocr, line):
     return fix_quote(mocr, img) if extra_close(text) is not None else text
 
 
-def ocr_dialogue(det, mocr, img):
-    texts = [ocr_line(mocr, line) for line in split_lines(det, img.convert("RGB"))]
+def ocr_dialogue(det, mocr, img, seen):
+    """seen 是上次识别过的行(行图 → 文字),就地换成这次的行;一屏累积多句时旧行不用重认,认出来的字也不会变。"""
+    texts, known = [], dict(seen)
+    seen.clear()
+    for line in split_lines(det, img.convert("RGB")):
+        key = line.size, line.tobytes()
+        seen[key] = known[key] if key in known else ocr_line(mocr, line)
+        texts.append(seen[key])
     # 人名单独占第一行、下一行以「」或（）开头时,人名后加冒号:名字：「……」;Sakura 译文会照样保留冒号
-    if len(texts) >= 2 and len(texts[0]) <= 8 and not re.search("[「」『』（）()]", texts[0]) \
+    if len(texts) >= 2 and len(texts[0]) <= 8 and not re.search("[「」『』（）()。、！？…]", texts[0]) \
             and texts[1].startswith(("「", "『", "（", "(")):
         texts[0] += "："
     text = re.sub("．{2,}", "……", "".join(texts))
@@ -404,12 +417,14 @@ class App:
         self.last_sig = None
         self.pending_sig = None
         self.frames = deque(maxlen=FRAME_KEEP)
+        self.last_ja = ""
+        self.seen_lines = {}
 
         self.root = tk.Tk()
         self.root.title(APP_TITLE)
         self.root.configure(bg="#1e1e1e")
         self.root.attributes("-topmost", True)
-        rect = find_game_rect(self.cfg["game_title"])
+        _, rect = find_game(self.cfg["games"])
         if self.cfg["geometry"]:
             self.root.geometry(self.cfg["geometry"])
         elif rect:  # 首次打开放在游戏画面正下方,免得挡住对话框被截进去
@@ -551,7 +566,7 @@ class App:
     def on_click(self, x, y, button, pressed):
         if not pressed or button.name not in self.cfg["trigger_buttons"]:
             return
-        rect = find_game_rect(self.cfg["game_title"])
+        _, rect = find_game(self.cfg["games"])
         if rect and rect[0] <= x < rect[0] + rect[2] and rect[1] <= y < rect[1] + rect[3]:
             self.trigger()
 
@@ -563,14 +578,19 @@ class App:
             self.trigger()
 
     def game_active(self):
-        game = self.cfg["game_title"]
-        return bool(game) and game in active_window_title()
+        title = active_window_title()
+        return any(game["title"] and game["title"] in title for game in self.cfg["games"])
 
     def grab_dialogue(self):
-        rect = find_game_rect(self.cfg["game_title"])
+        game, rect = find_game(self.cfg["games"])
         if rect is None:
             return None
-        return ImageGrab.grab(bbox=region_bbox(rect, self.cfg["region"]), xdisplay=os.environ.get("DISPLAY", ":0"))
+        box = region_bbox(rect, game["region"])
+        img = ImageGrab.grab(bbox=box, xdisplay=os.environ.get("DISPLAY", ":0"))
+        if "mask" in game:  # 会动的等待图标不遮掉的话,自动模式一直以为画面变了
+            l, t, r, b = region_bbox(rect, game["mask"])
+            ImageDraw.Draw(img).rectangle((l - box[0], t - box[1], r - box[0], b - box[1]), fill=img.getpixel((0, 0)))
+        return img
 
     def sampler(self):
         """游戏在前台时给台词区留底;触发时用按键前一刻的画面,按键本身让游戏藏起台词也不影响。"""
@@ -613,14 +633,17 @@ class App:
             return
         self.results.put(("status", "识别中…"))
         img.save(HERE / "last_capture.png")  # 只留最新一张,认错字或出错时拿来查
-        ja = ocr_dialogue(self.translator.det, self.translator.ocr, img).strip()
+        ja = ocr_dialogue(self.translator.det, self.translator.ocr, img, self.seen_lines).strip()
         (HERE / "last_capture.txt").write_text(ja, encoding="utf-8")
         if not ja:
             self.results.put(("status", "对话框里没识别到文字"))
             return
-        self.results.put(("ja", tokenize(self.translator.tagger, ja, self.cfg["readings"])))
+        # 一屏累积多句的游戏,这次的文字接在上次后面时只翻新增的部分;没有新增就翻整屏
+        new = ja.removeprefix(self.last_ja).strip() or ja
+        self.last_ja = ja
+        self.results.put(("ja", tokenize(self.translator.tagger, new, self.cfg["readings"])))
         self.results.put(("status", "翻译中…"))
-        self.results.put(("zh", self.translator.translate(ja)))
+        self.results.put(("zh", self.translator.translate(new)))
         self.results.put(("status", "就绪"))
 
     def poll_results(self):
@@ -659,10 +682,11 @@ class App:
         self.root.after(AUTO_POLL_MS, self.auto_tick)
 
     def no_game_hint(self):
-        return "没找到游戏窗口" if self.cfg["game_title"] else "先在 config.json 里填 game_title(游戏窗口标题的一部分)"
+        named = any(game["title"] for game in self.cfg["games"])
+        return "没找到游戏窗口" if named else "先在 config.json 里填 game_title(游戏窗口标题的一部分)"
 
     def calibrate(self):
-        rect = find_game_rect(self.cfg["game_title"])
+        game, rect = find_game(self.cfg["games"])
         if rect is None:
             self.status.configure(text=self.no_game_hint())
             return
@@ -694,7 +718,7 @@ class App:
             if r - l < 20 or b - t < 10:
                 self.status.configure(text="框太小，已取消")
                 return
-            self.cfg["region"] = [l / w, t / h, r / w, b / h]
+            game["region"] = [l / w, t / h, r / w, b / h]
             save_config(self.cfg)
             self.status.configure(text="对话框位置已保存")
 
