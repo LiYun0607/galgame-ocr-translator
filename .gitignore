@@ -4,4 +4,7 @@ models/
 last_capture.png
 last_capture.txt
 config.json
+# 生词本,含游戏台词
+vocab.json
+vocab.tmp
 __pycache__/

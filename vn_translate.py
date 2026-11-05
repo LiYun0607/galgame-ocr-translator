@@ -20,9 +20,12 @@ from PIL import Image, ImageDraw, ImageGrab, ImageOps
 from pynput import keyboard, mouse
 from Xlib import X, display as xdisplay
 
+from vocab import ReviewWindow, Vocab, sentence_of
+
 HERE = Path(__file__).resolve().parent
 MODEL = HERE / "models" / "Sakura-Galtransl-7B-v3.7.gguf"
 CONFIG = HERE / "config.json"
+VOCAB = HERE / "vocab.json"
 GAME_ASPECT = 16 / 9
 DEFAULT_REGION = [0.17, 0.76, 0.86, 0.99]  # 台词区在游戏画面里的相对位置(左,上,右,下),默认值按台词直接写在画面中下部的游戏调的
 APP_TITLE = "VN 翻译"
@@ -420,6 +423,8 @@ class App:
         self.frames = deque(maxlen=FRAME_KEEP)
         self.last_ja = ""
         self.seen_lines = {}
+        self.vocab = Vocab(VOCAB)
+        self.review = None
 
         self.root = tk.Tk()
         self.root.title(APP_TITLE)
@@ -464,6 +469,9 @@ class App:
         tk.Button(bar, text="重新框选对话框", command=self.calibrate).pack(side="left", padx=6)
         self.auto_btn = tk.Button(bar, text="自动：关", command=self.toggle_auto)
         self.auto_btn.pack(side="left")
+        self.review_btn = tk.Button(bar, command=self.open_review)
+        self.review_btn.pack(side="left", padx=6)
+        self.update_review_btn()
         self.status = tk.Label(bar, text="正在加载模型…", fg="#c8a24a", bg="#1e1e1e")
         self.status.pack(side="right")
         self.root.bind("<Configure>", lambda e: self.rewrap())
@@ -548,14 +556,19 @@ class App:
         word = "".join(t.surface for t in toks[:-1]) + last.base
         reading = "".join(t.reading or jaconv.kata2hira(t.surface) for t in toks[:-1]) \
             + (last.base_reading or jaconv.kata2hira(last.base))
+        surfaces = [t.surface for t in self.tokens]
+        before, span, after = "".join(surfaces[:lo]), "".join(surfaces[lo:hi + 1]), "".join(surfaces[hi + 1:])
+        # 助词、助动词单独点开多半是手滑,不进生词本
+        card = None if len(toks) == 1 and last.pos in ("助詞", "助動詞") else dict(
+            word=word, reading=reading, pos=last.pos if len(toks) == 1 else "词组", span=span,
+            sentence=sentence_of(before, span, after))
         self.word_now = word
         self.root.clipboard_clear()
         self.root.clipboard_append(word)
         reading = f"（{reading}）" if reading != word else ""
         self.word_head = f"{word}{reading}  {last.pos if len(toks) == 1 else '词组'}"
         self.word.configure(text=f"{self.word_head}  →  查询中…", fg="#ffffff")
-        surfaces = [t.surface for t in self.tokens]
-        self.jobs.put(("word", ("".join(surfaces[:lo]), "".join(surfaces[lo:hi + 1]), "".join(surfaces[hi + 1:]))))
+        self.jobs.put(("word", ((before, span, after), card)))
 
     def open_dict(self):
         if self.word_now:
@@ -626,7 +639,8 @@ class App:
 
     def run_job(self, kind, arg):
         if kind == "word":
-            self.results.put(("word", self.translator.gloss(*arg)))
+            parts, card = arg
+            self.results.put(("word", (card, self.translator.gloss(*parts))))
             return
         img = self.frame_before(arg)
         if img is None:
@@ -657,10 +671,23 @@ class App:
                 self.render_ja()
                 self.zh.configure(text="")
             elif kind == "word":
-                self.word.configure(text=f"{self.word_head}  →  {value}")
+                card, meaning = value
+                self.word.configure(text=f"{self.word_head}  →  {meaning}")
+                if card:
+                    self.vocab.add(**card, meaning=meaning, zh=self.zh.cget("text"))
+                    self.update_review_btn()
             else:
                 self.zh.configure(text=value)
         self.root.after(50, self.poll_results)
+
+    def update_review_btn(self):
+        n = len(self.vocab.due())
+        self.review_btn.configure(text=f"复习（{n}）" if n else "复习")
+
+    def open_review(self):
+        if self.review is None or not self.review.top.winfo_exists():
+            self.review = ReviewWindow(self.root, self.vocab, self.update_review_btn)
+        self.review.top.lift()
 
     def toggle_auto(self):
         self.auto = not self.auto
