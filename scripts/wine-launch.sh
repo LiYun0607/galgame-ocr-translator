@@ -8,7 +8,7 @@ export WINEPREFIX="${WINEPREFIX:-$HOME/.wine}" LANG=ja_JP.UTF-8 WINEDEBUG=-all P
 
 cd "$GAME_DIR" || exit 1
 wine "$GAME_DIR/$EXE"
-wineserver -w
+timeout 10 wineserver -w  # 后台服务有时不退出,不能一直等
 
 K=org.gnome.settings-daemon.plugins.color
 if [ "$(gsettings get $K night-light-enabled)" = "true" ]; then
