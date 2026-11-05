@@ -46,7 +46,7 @@ def load_config():
     # trigger_key: 单个字符或 pynput 键名(如 "f9");trigger_buttons: 鼠标侧键 button8(后退)/button9(前进)
     # readings: 读音修正表,分词词典读错的人名、专有词写在这里;dict_url: 「查词典」打开的网址,{word} 处填词
     # glossary: 术语表,每条「日文->中文 #备注」,整句翻译和查词都会参考;和中文同形但意思不同的词放这里
-    cfg = {"games": [], "glossary": ["辟易->厌烦", "香具師->街头小贩 #在庙会、路边摆摊吆喝叫卖的人"], "geometry": None,
+    cfg = {"games": [], "glossary": ["辟易->厌烦", "香具師->街头小贩 #在庙会、路边摆摊吆喝叫卖的人", "羽目->窘境 #「〜羽目になる」：落得……的下场、不得不……"], "geometry": None,
            "trigger_key": "t", "trigger_buttons": ["button8", "button9"],
            "readings": {"座敷童子": "ざしきわらし", "素": "す", "一寸": "ちょっと"}, "dict_url": "https://cjjc.weblio.jp/content/{word}"}
     if CONFIG.exists():
@@ -403,7 +403,8 @@ class Translator:
                     break
             else:
                 part = self.complete(self.prompt(span, []), 0.1, 32)
-            self.gloss_cache[key] = part
+            # 中日同形词(学校)照抄是对的,但也可能是模型不会译(沙汰),两者分不开,只提示不替换
+            self.gloss_cache[key] = f"{part}（和原词相同，可能是模型照抄，可点「查词典」）" if part == span else part
         return self.gloss_cache[key]
 
 
