@@ -8,6 +8,7 @@ from collections import deque
 
 INTERVALS = [1, 3, 7, 14, 30, 60]  # 连续记得第 n 次后隔多少天再考,用完后都按最后一档
 BG = "#1e1e1e"
+WIDTH, HEIGHT = 780, 440  # 复习窗最小尺寸,内容多时自动加高
 
 
 def today():
@@ -78,18 +79,17 @@ class ReviewWindow:
         top.title("生词复习")
         top.configure(bg=BG)
         top.attributes("-topmost", True)  # 主窗口也是置顶的,不置顶会被它盖住
-        top.geometry("780x440")
+        top.geometry(f"{WIDTH}x{HEIGHT}")
+        top.minsize(WIDTH, HEIGHT)
         self.left = tk.Label(top, fg="#7a7a7a", bg=BG, anchor="e", font=("Noto Sans CJK SC", 11))
         self.left.pack(fill="x", padx=16, pady=(10, 0))
         self.head = tk.Label(top, fg="#ffffff", bg=BG, font=("Noto Sans CJK JP", 30))
         self.head.pack(pady=(4, 10))
-        self.sentence = tk.Text(top, height=3, wrap="char", bg=BG, fg="#d0d0d0", relief="flat", highlightthickness=0,
-                                font=("Noto Sans CJK JP", 16), takefocus=0, cursor="arrow")
+        self.sentence = self.text_box("#d0d0d0", ("Noto Sans CJK JP", 16))
         self.sentence.tag_configure("hit", foreground="#6fc3ff")
         self.sentence.pack(fill="x", padx=16)
-        self.answer_label = tk.Label(top, fg="#ffffff", bg=BG, justify="left", anchor="nw", wraplength=740,
-                                     font=("Noto Sans CJK SC", 15))
-        self.answer_label.pack(fill="both", expand=True, padx=16, pady=(6, 0))
+        self.answer = self.text_box("#ffffff", ("Noto Sans CJK SC", 15))
+        self.answer.pack(fill="both", expand=True, padx=16, pady=(6, 0))
         bar = tk.Frame(top, bg=BG)
         bar.pack(fill="x", padx=16, pady=10)
         self.show_btn = tk.Button(bar, text="看答案（空格）", command=self.reveal)
@@ -108,45 +108,61 @@ class ReviewWindow:
         top.focus_force()
         self.next_card()
 
+    def text_box(self, fg, font):
+        return tk.Text(self.top, height=1, width=1, wrap="char", bg=BG, fg=fg, relief="flat", highlightthickness=0,
+                       font=font, takefocus=0, cursor="arrow", state="disabled")
+
+    def fill(self, box, text, span=""):
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        box.insert("1.0", text)
+        if span and span in text:
+            i = text.index(span)
+            box.tag_add("hit", f"1.0+{i}c", f"1.0+{i + len(span)}c")
+        box.configure(state="disabled")
+
+    def fit(self):
+        """文字框的行数和窗口高度跟着内容走,否则长句和整段译文显示不全。"""
+        top = self.top
+        top.update_idletasks()
+        for box in (self.sentence, self.answer):
+            lines = box.tk.call(box._w, "count", "-update", "-displaylines", "1.0", "end")
+            box.configure(height=max(1, int(lines)))
+        top.update_idletasks()
+        top.geometry(f"{max(top.winfo_width(), WIDTH)}x{max(top.winfo_reqheight(), HEIGHT)}")
+
     def next_card(self):
         self.revealed = False
         self.no_btn.pack_forget()
         self.yes_btn.pack_forget()
-        self.answer_label.configure(text="")
-        self.fill_sentence("", "")
+        self.fill(self.answer, "")
+        self.fill(self.sentence, "")
         if not self.queue:
             self.word = None
             self.left.configure(text="")
             self.head.configure(text="今天的词复习完了")
             self.show_btn.pack_forget()
             self.drop_btn.pack_forget()
+            self.fit()
             return
         self.word = self.queue.popleft()
         e = self.vocab.words[self.word]
         self.left.configure(text=f"还剩 {len(self.queue) + 1} 个")
         self.head.configure(text=self.word)
-        self.fill_sentence(e["sentence"], e["span"])
+        self.fill(self.sentence, e["sentence"], e["span"])
         self.show_btn.pack(side="left")
-
-    def fill_sentence(self, text, span):
-        s = self.sentence
-        s.configure(state="normal")
-        s.delete("1.0", "end")
-        s.insert("1.0", text)
-        if span and span in text:
-            i = text.index(span)
-            s.tag_add("hit", f"1.0+{i}c", f"1.0+{i + len(span)}c")
-        s.configure(state="disabled")
+        self.fit()
 
     def reveal(self):
         if self.word is None or self.revealed:
             return
         self.revealed = True
         e = self.vocab.words[self.word]
-        self.answer_label.configure(text=f"{e['reading']}  {e['pos']}\n{e['meaning']}\n\n{e['zh']}")
+        self.fill(self.answer, f"{e['reading']}  {e['pos']}\n{e['meaning']}\n\n{e['zh']}")
         self.show_btn.pack_forget()
         self.no_btn.pack(side="left")
         self.yes_btn.pack(side="left", padx=6)
+        self.fit()
 
     def grade(self, remembered):
         if self.word is None:
