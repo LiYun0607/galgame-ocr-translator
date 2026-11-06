@@ -553,9 +553,12 @@ class App:
         """单个词查原形;拖选的多个词按词组查:前面的词照原样,最后一个词换成原形,如 気/に/かけ → 気にかける。"""
         toks = self.tokens[lo:hi + 1]
         last = toks[-1]
-        word = "".join(t.surface for t in toks[:-1]) + last.base
+        # 词组以助词、助动词结尾时保留选中的样子:適当/に 的に词典算作だ的变形,还原成 適当だ 就和选的对不上了
+        keep = len(toks) > 1 and last.pos in ("助詞", "助動詞")
+        end, end_reading = (last.surface, last.reading) if keep else (last.base, last.base_reading)
+        word = "".join(t.surface for t in toks[:-1]) + end
         reading = "".join(t.reading or jaconv.kata2hira(t.surface) for t in toks[:-1]) \
-            + (last.base_reading or jaconv.kata2hira(last.base))
+            + (end_reading or jaconv.kata2hira(end))
         surfaces = [t.surface for t in self.tokens]
         before, span, after = "".join(surfaces[:lo]), "".join(surfaces[lo:hi + 1]), "".join(surfaces[hi + 1:])
         # 助词、助动词单独点开多半是手滑,不进生词本
