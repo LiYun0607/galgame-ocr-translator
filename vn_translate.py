@@ -427,6 +427,8 @@ class App:
         self.review = None
 
         self.root = tk.Tk()
+        # 窗口里没有输入框,不用输入法;fcitx 开着时按键先过它,复习窗的快捷键可能收不到
+        self.root.tk.call("tk", "useinputmethods", "0")
         self.root.title(APP_TITLE)
         self.root.configure(bg="#1e1e1e")
         self.root.attributes("-topmost", True)

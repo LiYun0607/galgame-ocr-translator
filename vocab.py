@@ -97,9 +97,12 @@ class ReviewWindow:
         self.yes_btn = tk.Button(bar, text="记得（2）", command=lambda: self.grade(True))
         self.drop_btn = tk.Button(bar, text="不用背（Delete）", command=self.drop)
         self.drop_btn.pack(side="right")
-        top.bind("<space>", lambda e: self.reveal())
-        top.bind("1", lambda e: self.grade(False))
-        top.bind("2", lambda e: self.grade(True))
+        for key in ("<space>", "<Return>", "<KP_Enter>"):
+            top.bind(key, lambda e: self.reveal())
+        for key in ("1", "<KP_1>", "<KP_End>"):  # 小键盘的键名和主键盘不同,NumLock 关着时又是另一个
+            top.bind(key, lambda e: self.grade(False))
+        for key in ("2", "<KP_2>", "<KP_Down>"):
+            top.bind(key, lambda e: self.grade(True))
         top.bind("<Delete>", lambda e: self.drop())
         top.bind("<Escape>", lambda e: top.destroy())
         top.focus_force()
@@ -146,7 +149,10 @@ class ReviewWindow:
         self.yes_btn.pack(side="left", padx=6)
 
     def grade(self, remembered):
-        if not self.revealed:
+        if self.word is None:
+            return
+        if not self.revealed:  # 没看答案就按了打分键:先给答案,再按一次才算数
+            self.reveal()
             return
         self.vocab.answer(self.word, remembered)
         if not remembered:
