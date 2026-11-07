@@ -426,7 +426,7 @@ class App:
         self.vocab = Vocab(VOCAB)
         self.review = None
 
-        self.root = tk.Tk()
+        self.root = tk.Tk(className="Vn-translate")  # 默认类名是 Tk,dock 认不出这个窗口属于哪个图标
         # 窗口里没有输入框,不用输入法;fcitx 开着时按键先过它,复习窗的快捷键可能收不到
         self.root.tk.call("tk", "useinputmethods", "0")
         self.root.title(APP_TITLE)

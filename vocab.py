@@ -75,7 +75,7 @@ class ReviewWindow:
         self.word = None
         self.revealed = False
 
-        self.top = top = tk.Toplevel(root)
+        self.top = top = tk.Toplevel(root, class_=root.winfo_class())  # 窗口类和主窗口相同,dock 才归到同一个图标
         top.title("生词复习")
         top.configure(bg=BG)
         top.attributes("-topmost", True)  # 主窗口也是置顶的,不置顶会被它盖住

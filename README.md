@@ -99,7 +99,9 @@ manga-ocr 第一次运行时会自动下载自己的模型（约 450 MB）。
 VNTRANS_PY=$E/bin/python scripts/vn-translate.sh
 ```
 
-`VNTRANS_PY` 是装好依赖的 Python。脚本可以从任何目录调用，也可以软链接到 `~/.local/bin` 里。脚本会清掉 `PYTHONPATH`，免得系统里的 ROS 等包混进来。
+`VNTRANS_PY` 是装好依赖的 Python。脚本可以从任何目录调用，也可以软链接到 `~/.local/bin` 里。脚本会清掉 `PYTHONPATH`，免得系统里的 ROS 等包混进来。已经开着时再启动会直接退出，不会多开一份。
+
+想从 GNOME 的 dock 启动，就写一个 `.desktop` 文件，加上 `StartupWMClass=Vn-translate`，窗口才会归到图标上。
 
 `scripts/wine-launch.sh <游戏目录> <exe 文件名>` 是用 Wine 启动游戏的脚本，做三件事：
 - 设日文 locale；
