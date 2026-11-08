@@ -31,6 +31,10 @@ DEFAULT_REGION = [0.17, 0.76, 0.86, 0.99]  # 台词区在游戏画面里的相�
 APP_TITLE = "VN 翻译"
 HISTORY_LINES = 5
 AUTO_POLL_MS = 500
+# 自动模式把台词区缩成 64×16 的灰度小图比较。CG 里的雨、闪光粒子让相邻两帧差 1~2 级,要求完全一致就永远不触发;
+# 台词里新出一个字一般差 30 多级,最小的也有 10 级
+AUTO_STILL = 4  # 相邻两次采样每格差都不超过这个值,算画面停住了
+AUTO_CHANGED = 8  # 和上次翻译时比,有一格差超过这个值才算换了台词
 SAMPLE_INTERVAL = 0.2  # 台词区留底截图的间隔(秒)
 FRAME_KEEP = 8
 CPU_THREADS = 4  # 别占满 CPU,否则 Wine 的声音线程抢不到时间,耳机里会噼啪响
@@ -292,6 +296,11 @@ def ocr_dialogue(det, mocr, img, seen):
     text = re.sub("(?<=[。」』！？…）])[☆★]+$", "", text)  # 句末等待点击的风车图标偶尔被认成☆
     text = re.sub("(?<=[。」』！？）])[ぁぃぅぇぉっゃゅょァィゥェォッャュョ]$", "", text)  # 句号后不会单跟一个小写假名,是图标或背景被认成字
     return re.sub("(?<=[？！])・", "　", text)  # 问号后的全角空格常被认成「・」
+
+
+def sig_diff(a, b):
+    """两张台词区小图最大的一格亮度差;没有上一张或尺寸不同时当作完全不同。"""
+    return 255 if a is None or b is None or a.shape != b.shape else int(np.abs(a - b).max())
 
 
 def new_part(prev, ja):
@@ -711,13 +720,13 @@ class App:
             self.root.after(AUTO_POLL_MS, self.auto_tick)
 
     def auto_tick(self):
-        """自动模式:对话框画面连续两次采样一致且与上次翻译时不同,就触发翻译。"""
+        """自动模式:对话框画面连续两次采样基本一致(停住了)且与上次翻译时明显不同,就触发翻译。"""
         if not self.auto:
             return
         img = self.frames[-1][1] if self.translator and self.frames else None
         if img is not None:
-            sig = ImageOps.grayscale(img).resize((64, 16)).tobytes()
-            if sig == self.pending_sig and sig != self.last_sig:
+            sig = np.asarray(ImageOps.grayscale(img).resize((64, 16)), dtype=np.int16)
+            if sig_diff(sig, self.pending_sig) <= AUTO_STILL and sig_diff(sig, self.last_sig) > AUTO_CHANGED:
                 self.last_sig = sig
                 self.trigger()
             self.pending_sig = sig
