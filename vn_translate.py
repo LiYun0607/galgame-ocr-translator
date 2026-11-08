@@ -290,6 +290,7 @@ def ocr_dialogue(det, mocr, img, seen):
         texts[0] += "："
     text = re.sub("．{2,}", "……", "".join(texts))
     text = re.sub("(?<=[。」』！？…）])[☆★]+$", "", text)  # 句末等待点击的风车图标偶尔被认成☆
+    text = re.sub("(?<=[。」』！？）])[ぁぃぅぇぉっゃゅょァィゥェォッャュョ]$", "", text)  # 句号后不会单跟一个小写假名,是图标或背景被认成字
     return re.sub("(?<=[？！])・", "　", text)  # 问号后的全角空格常被认成「・」
 
 
