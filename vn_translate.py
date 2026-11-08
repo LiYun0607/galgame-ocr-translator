@@ -294,6 +294,15 @@ def ocr_dialogue(det, mocr, img, seen):
     return re.sub("(?<=[？！])・", "　", text)  # 问号后的全角空格常被认成「・」
 
 
+def new_part(prev, ja):
+    """一屏累积多句的游戏,这次的文字接在上次后面时只翻新增的部分;没有新增或换了一屏就翻整屏。
+    上次停在半句(游戏在句中停顿)时从那句开头算起,只翻后半截会不知所云。"""
+    if not prev or not ja.startswith(prev):
+        return ja
+    ends = [m.end() for m in re.finditer("[。！？」』）]+", prev)]
+    return ja[ends[-1] if ends else 0:].strip() or ja
+
+
 Token = namedtuple("Token", "surface reading base base_reading pos")
 
 
@@ -659,8 +668,7 @@ class App:
         if not ja:
             self.results.put(("status", "对话框里没识别到文字"))
             return
-        # 一屏累积多句的游戏,这次的文字接在上次后面时只翻新增的部分;没有新增就翻整屏
-        new = ja.removeprefix(self.last_ja).strip() or ja
+        new = new_part(self.last_ja, ja)
         self.last_ja = ja
         self.results.put(("ja", tokenize(self.translator.tagger, new, self.cfg["readings"])))
         self.results.put(("status", "翻译中…"))
